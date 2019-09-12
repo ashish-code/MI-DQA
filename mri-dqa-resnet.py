@@ -73,7 +73,7 @@ class MRIData(Dataset):
         nii = nii[h_l:h_u, w_l:w_u, d]
         # convert to pytorch tensor
         nii = torch.tensor(nii)
-        nii = nii.view(patch_h, patch_w, 1).expand(-1, -1, 3)
+        nii = nii.view(1, patch_h, patch_w).expand(3, -1, -1)
         # return the mri patch and associated label
         return nii, label
 
@@ -246,6 +246,7 @@ def main():
     for epoch in range(n_epoch):
         for batch_idx, (data, target) in enumerate(train_loader):
             target = target.to('cuda:0')
+            print(data.shape)
             optimizer.zero_grad()
             output = model(data)
             loss = criterion(output, target)
