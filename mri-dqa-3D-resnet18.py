@@ -37,17 +37,25 @@ from functools import partial
 # Nifti I/O
 import nibabel
 
+# supress dicom verison warning
+import sys
+import warnings
+if not sys.warnoptions:
+    warnings.simplefilter("ignore")
 
-train_csv = 'train.csv'
-val_csv = 'val.csv'
+train_csv = 'train-office.csv'
+val_csv = 'val-office.csv'
 n_epoch = 100000
 patch_h = 56
 patch_w = 56
 patch_d = 16
+batch_size = 24
 
 checkpoint_dir = './checkpoints/'
+pretrained_dir = './pretrained/'
 ckpt_path = checkpoint_dir+'mri-dqa-3d-resnet-18.pth'
 perf_path = checkpoint_dir+'mri-dqa-3d-resnet-18.perf'
+pretrained_path = pretrained_dir+'resnet-18-kinetics.pth'
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 __all__ = ['ResNet', 'resnet18']
@@ -151,22 +159,10 @@ class Bottleneck(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self,
-                 block,
-                 layers,
-                 sample_size,
-                 sample_duration,
-                 shortcut_type='B',
-                 num_classes=400):
+    def __init__(self, block, layers, sample_size, sample_duration, shortcut_type='A', num_classes=400):
         self.inplanes = 64
         super(ResNet, self).__init__()
-        self.conv1 = nn.Conv3d(
-            3,
-            64,
-            kernel_size=7,
-            stride=(1, 2, 2),
-            padding=(3, 3, 3),
-            bias=False)
+        self.conv1 = nn.Conv3d(3,64, kernel_size=7,stride=(1, 2, 2),padding=(3, 3, 3),bias=False)
         self.bn1 = nn.BatchNorm3d(64)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool3d(kernel_size=(3, 3, 3), stride=2, padding=1)
@@ -185,7 +181,7 @@ class ResNet(nn.Module):
 
         for m in self.modules():
             if isinstance(m, nn.Conv3d):
-                m.weight = nn.init.kaiming_normal(m.weight, mode='fan_out')
+                m.weight = nn.init.kaiming_normal_(m.weight, mode='fan_out')
             elif isinstance(m, nn.BatchNorm3d):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
@@ -308,6 +304,8 @@ class MRIData(Dataset):
         nii = torch.tensor(nii)
         nii.unsqueeze_(0)
         nii = nii.repeat(3,1,1,1)
+        # permute the data to put 
+        nii = nii.permute(0, 3, 1, 2)
         # return the mri patch and associated label
         return nii, label
 
@@ -316,15 +314,144 @@ class MRIData(Dataset):
 
 # -- DataSet Class -----------------------------------
 
+def train_model(model, criterion, optimizer, scheduler, epoch, perf, num_epochs):
+    best_model_wts = copy.deepcopy(model.state_dict())
+    best_acc = 0.0
+    while epoch < num_epochs:
+        epoch += 1
+        print('Epoch {}/{}'.format(epoch, num_epochs - 1))
+
+        # Each epoch has a training and validation phase
+        for phase in ['train', 'val']:
+            if phase == 'train':
+                model.train()  # Set model to training mode
+
+                dataset = MRIData(phase)
+                dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=1, drop_last=True)
+            else:
+                model.eval()   # Set model to evaluate mode
+                dataset = MRIData(phase)
+                dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=1, drop_last=True)
+
+            running_loss = 0.0
+            running_corrects = 0
+
+            # Iterate over data.
+            for ibatch, (inputs, labels) in enumerate(dataloader):
+                inputs = inputs.to(device, dtype=torch.float)
+                labels = labels.to(device, dtype=torch.long)
+
+                # zero the parameter gradients
+                optimizer.zero_grad()
+
+                # forward
+                # track history if only in train
+                with torch.set_grad_enabled(phase == 'train'):
+                    outputs = model(inputs)
+                    _, preds = torch.max(outputs, 1)
+                    loss = criterion(outputs, labels)
+
+                    # backward + optimize only if in training phase
+                    if phase == 'train':
+                        loss.backward()
+                        optimizer.step()
+
+                # statistics
+                running_loss += loss.item() * inputs.size(0)
+                running_corrects += torch.sum(preds == labels.data)
+            if phase == 'train':
+                scheduler.step()
+
+            epoch_loss = running_loss / (ibatch*batch_size)
+            epoch_acc = running_corrects.double() / (ibatch*batch_size)
+
+            print('{} Loss: {:.4f} Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc))
+            if phase=='train':
+                perf['train_loss'].append(epoch_loss)
+                perf['train_acc'].append(epoch_acc)
+            else:
+                perf['val_loss'].append(epoch_loss)
+                perf['val_acc'].append(epoch_acc)
+
+            # deep copy the model
+            if phase == 'val' and epoch_acc > best_acc:
+                best_acc = epoch_acc
+                best_model_wts = copy.deepcopy(model.state_dict())
+
+        # save checkpoint
+        if epoch%2 == 0:
+            print(' -- writing checkpoint and performance files -- ')
+            torch.save({'epoch': epoch, 'model_state_dict': model.state_dict(),
+            'optimizer_state_dict':optimizer.state_dict(), 
+            'scheduler': scheduler.state_dict()}, ckpt_path)
+
+            torch.save({'train_loss': perf['train_loss'],
+            'train_acc': perf['train_acc'], 'val_loss': perf['val_loss'],
+            'val_acc': perf['val_acc']}, perf_path)
+
+    print('Best val Acc: {:4f}'.format(best_acc))
+
+    # load best model weights
+    model.load_state_dict(best_model_wts)
+    return model
 
 
 def main():
     dataset = MRIData('train')
-    dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=1, drop_last=True)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=1, drop_last=True)
     for data, label in dataloader:
         print(data.shape)
         break
-    pass
+    
+    # instantiate model, load if pre-trained model is available.
+    model = resnet18(num_classes = 400, shortcut_type='A', sample_size=112, sample_duration=16)
+    
+
+    model = model.cuda()
+    # model = nn.DataParallel(model)
+    # check to see if pre-trained file should be loaded
+    if not os.path.isfile(ckpt_path):
+        # load the pretrained
+        pretrain = torch.load(pretrained_path)
+        psd = pretrain['state_dict']
+        psd2 = dict()
+        for k,v in psd.items():
+            k2 = k.replace('module.','')
+            psd2[k2] = v
+
+        model.load_state_dict(psd2)
+        num_filters = model.fc.in_features
+        model.fc2 = nn.Linear(num_filters, 2)
+        model.fc2 = model.fc2.cuda()
+        parameters = get_fine_tuning_parameters(model, 0)
+        optimizer = optim.SGD(parameters, lr=0.001, momentum=0.9)
+        exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)
+        epoch = 0
+        loss = 0.0
+        perf = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
+    else:
+        # load the checkpoint
+        checkpoint = torch.load(ckpt_path)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        num_filters = model.fc.in_features
+        model.fc2 = nn.Linear(num_filters, 2)
+        model.fc2 = model.fc2.cuda()
+        parameters = get_fine_tuning_parameters(model, 0)
+        optimizer = optim.SGD(parameters, lr=0.0001, momentum=0.9)
+        exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
+        # load
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        epoch = checkpoint['epoch']
+        exp_lr_scheduler.load_state_dict(checkpoint['scheduler'])
+        perf = torch.load(perf_path)
+        for state in optimizer.state.values():
+            for k,v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.cuda()
+    
+    criterion = nn.CrossEntropyLoss()
+    model = model.to(device)
+    model = train_model(model, criterion, optimizer, exp_lr_scheduler, epoch, perf, n_epoch)
 
 
 if __name__=='__main__':

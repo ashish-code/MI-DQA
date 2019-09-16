@@ -29,7 +29,10 @@ import time
 import copy
 
 # Nifti I/O
-import nibabel
+import warnings
+with warnings.catch_warnings():
+    warnings.filterwarnings('ignore')
+    import nibabel
 
 train_csv = 'train.csv'
 val_csv = 'val.csv'
