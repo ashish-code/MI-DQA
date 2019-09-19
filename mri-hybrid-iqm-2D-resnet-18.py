@@ -33,8 +33,9 @@ with warnings.catch_warnings():
     warnings.filterwarnings('ignore')
     import nibabel
 
-train_csv = 'train.csv'
-val_csv = 'val.csv'
+train_csv = 'utils/train-hybrid-tesla.csv'
+val_csv = 'utils/val-hybrid-tesla.csv'
+
 n_epoch = 100000
 patch_h = 56
 patch_w = 56
@@ -43,5 +44,8 @@ checkpoint_dir = './checkpoints/'
 ckpt_path = checkpoint_dir+'mri-hybrid-iqm-dqa-2d-resnet-18.pth'
 perf_path = checkpoint_dir+'mri-hybrid-iqm-dqa-2d-resnet-18.perf'
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+
+
 
 
