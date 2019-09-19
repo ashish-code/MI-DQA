@@ -1,2 +1,5 @@
 *.pth
 
+/checkpoints/
+
+gradcam/

@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 def vis_2d():
 
-    file_path = 'C:/Users/Ashish/Repos/MI-DQA/checkpoints/mri-dqa-2d-resnet-18.perf'
+    file_path = 'D:\Repos\MI-DQA\checkpoints\mri-dqa-2d-resnet-18-epoch-350.perf'
 
     perf = torch.load(file_path)
 
@@ -66,4 +66,4 @@ def vis_3d():
 
 
 if __name__=='__main__':
-    vis_3d()
+    vis_2d()
