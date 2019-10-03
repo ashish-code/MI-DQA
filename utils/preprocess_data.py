@@ -10,8 +10,8 @@ import pandas as pd
 import numpy as np
 import os
 
-iqm_data_path = '../x_abide.csv'
-iqm_label_path = '../y_abide.csv'
+iqm_data_path = 'D:/Repos/MI-DQA/x_abide.csv'
+iqm_label_path = 'D:/Repos/MI-DQA/y_abide.csv'
 
 iqm_data = pd.read_csv(iqm_data_path, delimiter=',', index_col=0)
 iqm_label = pd.read_csv(iqm_label_path, delimiter=',', index_col=0)
@@ -85,35 +85,35 @@ val_iqm['mri_path'] = val_iqm.apply(lambda row: f'/mnt/data/home/aag106/ABIDE1/{
 train_iqm_csv_path = 'train-hybrid-tesla.csv'
 val_iqm_csv_path = 'val-hybrid-tesla.csv'
 
-train_iqm.to_csv(train_iqm_csv_path)
-val_iqm.to_csv(val_iqm_csv_path)
+# train_iqm.to_csv(train_iqm_csv_path)
+# val_iqm.to_csv(val_iqm_csv_path)
 
 # print(train_iqm_data.columns)
 # print(train_iqm_data.iloc[0])
 
-# train_0 = train_iqm_label[train_iqm_label.mos == -1.0]
-# val_0 = val_iqm_label[val_iqm_label.mos == -1.0]
+train_0 = train_iqm_label[train_iqm_label.mos == -1.0]
+val_0 = val_iqm_label[val_iqm_label.mos == -1.0]
 
 # print(train_0.shape)
 # print(train_0.head())
 # print(val_0.shape)
 # print(val_0.head())
 
-# train_cam_path = 'train-cam-tesla-0.csv'
-# val_cam_path = 'val-cam-tesla-0.csv'
-#
-# with open(train_cam_path, 'w') as f:
-#     for idx in train_0.index:
-#         site_id = train_0.loc[idx, 'site']
-#         sub_path = f'/mnt/data/home/aag106/ABIDE1/{site_id}/sub-00{idx}/anat/sub-00{idx}_T1w.nii.gz'
-#         # print(sub_path, os.path.exists(sub_path))
-#         f.write(sub_path+'\n')
-#
-# with open(val_cam_path, 'w') as f:
-#     for idx in val_0.index:
-#         site_it = val_0.loc[idx, 'site']
-#         sub_path = f'/mnt/data/home/aag106/ABIDE1/{site_id}/sub-00{idx}/anat/sub-00{idx}_T1w.nii.gz'
-#         f.write(sub_path+'\n')
+train_cam_path = 'train-cam-office-0.csv'
+val_cam_path = 'val-cam-office-0.csv'
+
+with open(train_cam_path, 'w') as f:
+    for idx in train_0.index:
+        site_id = train_0.loc[idx, 'site']
+        sub_path = f'D:/Datasets/ABIDE1/{site_id}/sub-00{idx}/anat/sub-00{idx}_T1w.nii.gz'
+        # print(sub_path, os.path.exists(sub_path))
+        f.write(sub_path+'\n')
+
+with open(val_cam_path, 'w') as f:
+    for idx in val_0.index:
+        site_it = val_0.loc[idx, 'site']
+        sub_path = f'D:/Datasets/ABIDE1/{site_id}/sub-00{idx}/anat/sub-00{idx}_T1w.nii.gz'
+        f.write(sub_path+'\n')
 
 
 

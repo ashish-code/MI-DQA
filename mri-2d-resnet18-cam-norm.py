@@ -38,7 +38,7 @@ train_csv = 'utils/train-cam-office-0.csv'
 val_csv = 'utils/val-cam-office-0.csv'
 
 checkpoint_dir = './checkpoints/'
-ckpt_path = checkpoint_dir+'mri-dqa-2d-resnet-18-rot.pth'
+ckpt_path = checkpoint_dir+'mri-dqa-2d-resnet-18-epoch-350.pth'
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # >> DataSet Class >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -108,10 +108,10 @@ class SaveFeatures():
 def getCAM(feature_conv, weight_fc, class_idx):
     _, nc, h, w = feature_conv.shape
     cam = weight_fc[class_idx].dot(feature_conv.reshape((nc, h*w)))
-    cam = cam.reshape(h,w)
+    cam = cam.reshape(h, w)
     cam = cam - np.min(cam)
     cam_img = cam/np.max(cam)
-    return [cam_img]
+    return cam_img, cam
 
 
 def grad_cam(image, model, count):
@@ -127,24 +127,35 @@ def grad_cam(image, model, count):
     weight_softmax_params = list(model._modules.get('fc').parameters())
     weight_softmax = np.squeeze(weight_softmax_params[0].cpu().data.numpy())
     class_idx = topk(pred_probabilities, 1)[1].int()
-    overlay = getCAM(activated_features.features, weight_softmax, class_idx)
+    overlay, cam = getCAM(activated_features.features, weight_softmax, class_idx)
 
     img = image[0, :, :].cpu().numpy()
 
-    fig, ax = plt.subplots(nrows=1, ncols=2)
-    ax[0].imshow(img, cmap=plt.cm.bone)
-    ax[0].set_xticks([], [])
-    ax[0].set_yticks([], [])
-    ax[0].set_title('MRI Slice Patch')
-    ax[1].imshow(img, cmap=plt.cm.gray)
-    ax[1].imshow(skimage.transform.resize(overlay[0], image.shape[1:3]), alpha=0.3, cmap='jet')
-    ax[1].set_xticks([], [])
-    ax[1].set_yticks([], [])
-    ax[1].set_title('Grad-CAM MRI')
-    fig.suptitle('Grad-CAM MRI-DQA-Augmented ResNet-18-ABIDE-1')
-    fig_path = f'gradcam_rot/gradcam-{count+1}.png'
+    # fig, ax = plt.subplots(nrows=1, ncols=3)
+    ax0 = plt.subplot(221)
+    ax0.imshow(img, cmap=plt.cm.bone)
+    ax0.set_xticks([], [])
+    ax0.set_yticks([], [])
+    ax0.set_title('MRI Slice Patch')
+
+    ax1 = plt.subplot(222)
+    ax1.imshow(img, cmap=plt.cm.gray)
+    ax1.imshow(skimage.transform.resize(overlay[0], image.shape[1:3]), alpha=0.3, cmap='jet')
+    ax1.set_xticks([], [])
+    ax1.set_yticks([], [])
+    ax1.set_title('Grad-CAM MRI')
+
+    ax2 = plt.subplot(212)
+    ax2.hist(cam, bins=256)
+    ax2.set_xlabel('gradient value')
+    ax2.set_ylabel('frequency')
+    ax2.set_title('GRADCAM Histogram')
+
+    plt.suptitle('Grad-CAM MRI-DQA-Augmented ResNet-18-ABIDE-1')
+    fig_path = f'gradcam_rot_norm/gradcam-{count+1}.png'
     plt.savefig(fig_path)
     print(fig_path)
+
 
 def main():
     # Get the pretrained model from checkpoint

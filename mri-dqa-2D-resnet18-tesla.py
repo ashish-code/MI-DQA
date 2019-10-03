@@ -25,6 +25,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import math
 import scipy.misc
+import scipy.ndimage
 import time 
 import copy
 
@@ -33,13 +34,13 @@ import nibabel
 
 train_csv = 'train-tesla.csv'
 val_csv = 'val-tesla.csv'
-n_epoch = 100000
+n_epoch = 1000
 patch_h = 56
 patch_w = 56
 
 checkpoint_dir = './checkpoints/'
-ckpt_path = checkpoint_dir+'mri-dqa-2d-resnet-18.pth'
-perf_path = checkpoint_dir+'mri-dqa-2d-resnet-18.perf'
+ckpt_path = checkpoint_dir+'mri-dqa-2d-resnet-18-rot.pth'
+perf_path = checkpoint_dir+'mri-dqa-2d-resnet-18-rot.perf'
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
@@ -79,6 +80,9 @@ class MRIData(Dataset):
         w_u = int(w_l+patch_w-1)
         d = int(random.randint(0, img_d-1))
         nii = nii[h_l:h_u, w_l:w_u, d]
+        # random rotation to the patch
+        rot_angle = 45*random.randint(0,3)
+        nii = scipy.ndimage.rotate(nii, angle=rot_angle, reshape=True)
         # resize
         nii = scipy.misc.imresize(nii, (224, 224))
         # convert to pytorch tensor
@@ -163,7 +167,7 @@ def train_model(model, criterion, optimizer, scheduler, epoch, perf, num_epochs=
         print()
 
         # save checkpoint
-        if epoch%2 == 0:
+        if epoch%20 == 0:
             print(' -- writing checkpoint and performance files -- ')
             torch.save({'epoch': epoch, 'model_state_dict': model.state_dict(),
             'optimizer_state_dict':optimizer.state_dict(), 'loss': loss,
