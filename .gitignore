@@ -3,3 +3,7 @@
 /checkpoints/
 
 gradcam/
+
+gradcam_rot/
+
+gradcam_rot_norm/

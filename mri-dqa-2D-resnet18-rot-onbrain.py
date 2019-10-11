@@ -32,15 +32,15 @@ import copy
 # Nifti I/O
 import nibabel
 
-train_csv = 'train-tesla.csv'
-val_csv = 'val-tesla.csv'
-n_epoch = 1000
+train_csv = 'train-office.csv'
+val_csv = 'val-office.csv'
+n_epoch = 500
 patch_h = 56
 patch_w = 56
 
 checkpoint_dir = './checkpoints/'
-ckpt_path = checkpoint_dir+'mri-dqa-2d-resnet-18-rot.pth'
-perf_path = checkpoint_dir+'mri-dqa-2d-resnet-18-rot.perf'
+ckpt_path = checkpoint_dir+'mri-dqa-2d-resnet-18-rot-onbrain.pth'
+perf_path = checkpoint_dir+'mri-dqa-2d-resnet-18-rot-onbrain.perf'
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
@@ -70,11 +70,13 @@ class MRIData(Dataset):
             w_l = int(random.randint(0, img_w - patch_w))
             w_u = int(w_l + patch_w - 1)
             d = int(random.randint(0, img_d - 1))
-            patch = patch[h_l:h_u, w_l:w_u, d]
-            #ToDo: determine acceptability threshold
-            acceptable = True
+            patch_t = patch[h_l:h_u, w_l:w_u, d]
+            # select patch if overlapping sufficient region of brain
+            patch_bg = patch_t < 64
+            if patch_bg.sum() < 0.075 * patch_w * patch_h:
+                acceptable = True
 
-        return patch
+        return patch_t
     
     def __getitem__(self, index):
         """
@@ -177,16 +179,19 @@ def train_model(model, criterion, optimizer, scheduler, epoch, perf, num_epochs=
         
         print()
 
-        # save checkpoint
-        if epoch%20 == 0:
+        # save performance
+        torch.save({'train_loss': perf['train_loss'],
+                    'train_acc': perf['train_acc'], 'val_loss': perf['val_loss'],
+                    'val_acc': perf['val_acc']}, perf_path)
+
+        # save checkpoint every 10 epochs
+        if epoch%10 == 0:
             print(' -- writing checkpoint and performance files -- ')
             torch.save({'epoch': epoch, 'model_state_dict': model.state_dict(),
             'optimizer_state_dict':optimizer.state_dict(), 'loss': loss,
             'scheduler': scheduler.state_dict()}, ckpt_path)
 
-            torch.save({'train_loss': perf['train_loss'],
-            'train_acc': perf['train_acc'], 'val_loss': perf['val_loss'],
-            'val_acc': perf['val_acc']}, perf_path)
+
 
     time_elapsed = time.time() - since
     print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))

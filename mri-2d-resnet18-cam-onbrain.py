@@ -30,8 +30,8 @@ import time
 import copy
 import skimage.transform
 
-patch_h = 112
-patch_w = 112
+patch_h = 56
+patch_w = 56
 # train_csv = 'utils/train-cam-tesla-0.csv'
 # val_csv = 'utils/val-cam-tesla-0.csv'
 train_0_csv = 'utils/train-cam-office-0.csv'
@@ -41,7 +41,7 @@ train_1_csv = 'utils/train-cam-office-1.csv'
 val_1_csv = 'utils/val-cam-office-1.csv'
 
 checkpoint_dir = './checkpoints/'
-ckpt_path = checkpoint_dir+'mri-dqa-2d-resnet-18-rot.pth'
+ckpt_path = checkpoint_dir+'mri-dqa-2d-resnet-18-rot-onbrain.pth'
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
@@ -60,6 +60,24 @@ class MRIData(Dataset):
         data_list_df.columns = ['path']
         self.image_path_list = list(data_list_df['path'])
 
+    def _get_acceptable(self, patch):
+        [img_h, img_w, img_d] = patch.shape
+        # extract random slice and random patch
+        acceptable = False
+        while not acceptable:
+            h_l = int(random.randint(0, img_h - patch_h))
+            h_u = int(h_l + patch_h - 1)
+            w_l = int(random.randint(0, img_w - patch_w))
+            w_u = int(w_l + patch_w - 1)
+            d = int(random.randint(0, img_d - 1))
+            patch_t = patch[h_l:h_u, w_l:w_u, d]
+            # select patch if overlapping sufficient region of brain
+            patch_bg = patch_t < 64
+            if patch_bg.sum() < 0.075 * patch_w * patch_h:
+                acceptable = True
+
+        return patch_t
+
     def __getitem__(self, index):
         """
         Returns a patch of a slice from MRI volume
@@ -71,20 +89,7 @@ class MRIData(Dataset):
         [img_h, img_w, img_d] = nii.shape
         # drop the bottom 25% and top 10% of the slices
         nii = nii[:, :, int(img_d / 4):int(9 * img_d / 10)]
-        [img_h, img_w, img_d] = nii.shape
-        _patch_h = patch_h
-        _patch_w = patch_w
-        if img_h < patch_h:
-            _patch_h = img_h
-        if img_w < patch_w:
-            _patch_w = img_w
-        # extract random slice and random patch
-        h_l = int(random.randint(0, img_h - _patch_h))
-        h_u = int(h_l + _patch_h - 1)
-        w_l = int(random.randint(0, img_w - _patch_w))
-        w_u = int(w_l + _patch_w - 1)
-        d = int(random.randint(0, img_d - 1))
-        nii = nii[h_l:h_u, w_l:w_u, d]
+        nii = self._get_acceptable(nii)
         # resize
         nii = scipy.misc.imresize(nii, (224, 224))
         # convert to pytorch tensor
@@ -146,7 +151,7 @@ def grad_cam(image, model, count):
     ax[1].set_yticks([], [])
     ax[1].set_title('Grad-CAM MRI')
     fig.suptitle('Grad-CAM MRI-DQA-Augmented ResNet-18-ABIDE-1')
-    fig_path = f'gradcam_rot/gradcam-{count+1}.png'
+    fig_path = f'gradcam_rot_onbrain/gradcam-{count+1}.png'
     plt.savefig(fig_path)
     print(fig_path)
 
@@ -160,7 +165,7 @@ def main():
     model = model.to(device)
     # put model in evaluation mode
     model.eval()
-    phase = 'train'
+    phase = 0
     dataset = MRIData(phase)
     dataloader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=1, drop_last=True)
     for count, inputs in enumerate(dataloader):

@@ -51,29 +51,48 @@ patch_w = 56
 
 checkpoint_dir = './checkpoints/'
 # ToDo: checkpoint file will be user input argument
-ckpt_path = checkpoint_dir+'mri-dqa-2d-resnet-18-epoch-350.pth'
+# ckpt_path = checkpoint_dir+'mri-dqa-2d-resnet-18-epoch-350.pth'
 # ckpt_path = checkpoint_dir + 'mri-dqa-2d-resnet-18.pth'
 # ckpt_path = checkpoint_dir + 'mri-dqa-2d-resnet-18-rot.pth'
+ckpt_path = checkpoint_dir + 'mri-dqa-2d-resnet-18-rot-onbrain.pth'
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
+def _get_acceptable(patch):
+    [img_h, img_w, img_d] = patch.shape
+    # extract random slice and random patch
+    acceptable = False
+    while not acceptable:
+        h_l = int(random.randint(0, img_h - patch_h))
+        h_u = int(h_l + patch_h - 1)
+        w_l = int(random.randint(0, img_w - patch_w))
+        w_u = int(w_l + patch_w - 1)
+        d = int(random.randint(0, img_d - 1))
+        patch_t = patch[h_l:h_u, w_l:w_u, d]
+        # select patch if overlapping sufficient region of brain
+        patch_bg = patch_t < 64
+        if patch_bg.sum() < 0.075 * patch_w * patch_h:
+            acceptable = True
+
+    return patch_t
+
 def get_random_patch(nii):
     [img_h, img_w, img_d] = nii.shape
-    # extract random slice and random patch
-    h_l = int(random.randint(0, img_h - patch_h))
-    h_u = int(h_l + patch_h - 1)
-    w_l = int(random.randint(0, img_w - patch_w))
-    w_u = int(w_l + patch_w - 1)
-    d = int(random.randint(0, img_d - 1))
-    nii = nii[h_l:h_u, w_l:w_u, d]
+    # drop the bottom 25% and top 10% of the slices
+    nii = nii[:, :, int(img_d / 4):int(9 * img_d / 10)]
+    nii = _get_acceptable(nii)
+
+    # random rotation to the patch
+    # rot_angle = 45 * random.randint(0, 3)
+    # nii = scipy.ndimage.rotate(nii, angle=rot_angle, reshape=True)
+    # resize
     nii = scipy.misc.imresize(nii, (224, 224))
     # convert to pytorch tensor
     nii = torch.tensor(nii)
     nii.unsqueeze_(0)
     nii = nii.repeat(3, 1, 1)
+    # return the mri patch and associated label
     return nii
-
-
 
 def compute_perf(phase='test', batch_size=32):
     if phase=='train':

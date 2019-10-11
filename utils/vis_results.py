@@ -66,7 +66,8 @@ def vis_3d():
 
 
 def vis_2d_rot():
-    file_path = 'D:\Repos\MI-DQA\checkpoints\mri-dqa-2d-resnet-18-rot.perf'
+    # file_path = 'D:\Repos\MI-DQA\checkpoints\mri-dqa-2d-resnet-18-rot.perf'
+    file_path = 'D:\Repos\MI-DQA\checkpoints\mri-dqa-2d-resnet-18-rot-onbrain.perf'
 
     perf = torch.load(file_path)
 

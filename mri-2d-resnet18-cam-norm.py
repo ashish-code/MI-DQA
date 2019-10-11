@@ -1,5 +1,11 @@
 """
-Class Activation Map for ResNet-18 with 2D Tensor of MRI slices
+Class Activation Map for ResNet-18 with 2D Tensor of MRI slices.
+Normalize the response over small subset of patches from all classes.
+
+author: ashish gupta
+email: ashishagupta@gmail.com
+date: 10-03-2019
+
 """
 import torch
 from torch import nn

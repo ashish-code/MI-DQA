@@ -102,16 +102,36 @@ val_0 = val_iqm_label[val_iqm_label.mos == -1.0]
 train_cam_path = 'train-cam-office-0.csv'
 val_cam_path = 'val-cam-office-0.csv'
 
+# with open(train_cam_path, 'w') as f:
+#     for idx in train_0.index:
+#         site_id = train_0.loc[idx, 'site']
+#         sub_path = f'D:/Datasets/ABIDE1/{site_id}/sub-00{idx}/anat/sub-00{idx}_T1w.nii.gz'
+#         # print(sub_path, os.path.exists(sub_path))
+#         f.write(sub_path+'\n')
+#
+# with open(val_cam_path, 'w') as f:
+#     for idx in val_0.index:
+#         site_it = val_0.loc[idx, 'site']
+#         sub_path = f'D:/Datasets/ABIDE1/{site_id}/sub-00{idx}/anat/sub-00{idx}_T1w.nii.gz'
+#         f.write(sub_path+'\n')
+
+# --- Repeat for class 1 (consensus accept)
+train_1 = train_iqm_label[train_iqm_label.mos == 1.0]
+val_1 = val_iqm_label[val_iqm_label.mos == 1.0]
+
+train_cam_path = 'train-cam-office-1.csv'
+val_cam_path = 'val-cam-office-1.csv'
+
 with open(train_cam_path, 'w') as f:
-    for idx in train_0.index:
-        site_id = train_0.loc[idx, 'site']
+    for idx in train_1.index:
+        site_id = train_1.loc[idx, 'site']
         sub_path = f'D:/Datasets/ABIDE1/{site_id}/sub-00{idx}/anat/sub-00{idx}_T1w.nii.gz'
         # print(sub_path, os.path.exists(sub_path))
         f.write(sub_path+'\n')
 
 with open(val_cam_path, 'w') as f:
-    for idx in val_0.index:
-        site_it = val_0.loc[idx, 'site']
+    for idx in val_1.index:
+        site_it = val_1.loc[idx, 'site']
         sub_path = f'D:/Datasets/ABIDE1/{site_id}/sub-00{idx}/anat/sub-00{idx}_T1w.nii.gz'
         f.write(sub_path+'\n')
 
