@@ -71,12 +71,13 @@ class MRIData(Dataset):
             w_u = int(w_l + patch_w - 1)
             d = int(random.randint(0, img_d - 1))
             patch_t = patch[h_l:h_u, w_l:w_u, d]
+            slice = patch[:,:,d]
             # select patch if overlapping sufficient region of brain
             patch_bg = patch_t < 64
             if patch_bg.sum() < 0.075 * patch_w * patch_h:
                 acceptable = True
 
-        return patch_t
+        return patch_t, slice
 
     def __getitem__(self, index):
         """
@@ -89,7 +90,7 @@ class MRIData(Dataset):
         [img_h, img_w, img_d] = nii.shape
         # drop the bottom 25% and top 10% of the slices
         nii = nii[:, :, int(img_d / 4):int(9 * img_d / 10)]
-        nii = self._get_acceptable(nii)
+        nii, slice = self._get_acceptable(nii)
         # resize
         nii = scipy.misc.imresize(nii, (224, 224))
         # convert to pytorch tensor
@@ -97,7 +98,7 @@ class MRIData(Dataset):
         nii.unsqueeze_(0)
         nii = nii.repeat(3, 1, 1)
         # return the mri patch and associated label
-        return nii
+        return nii, slice
 
     def __len__(self):
         return len(self.image_path_list)
@@ -168,7 +169,7 @@ def main():
     phase = 0
     dataset = MRIData(phase)
     dataloader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=1, drop_last=True)
-    for count, inputs in enumerate(dataloader):
+    for count, (inputs, slice) in enumerate(dataloader):
         image = inputs[0,:,:,:]
         image = image.to(device, dtype=torch.float)
         grad_cam(image, model, count)
