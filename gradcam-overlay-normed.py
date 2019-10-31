@@ -36,6 +36,8 @@ import cv2
 
 patch_h = 56
 patch_w = 56
+train_csv = 'train-office.csv'
+val_csv = 'val-office.csv'
 # train_csv = 'utils/train-cam-tesla-0.csv'
 # val_csv = 'utils/val-cam-tesla-0.csv'
 train_0_csv = 'utils/train-cam-office-0.csv'
@@ -48,8 +50,9 @@ checkpoint_dir = './checkpoints/'
 ckpt_path = checkpoint_dir+'mri-dqa-2d-resnet-18-rot-onbrain.pth'
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-CAM_MIN = -10.0
-CAM_MAX = 25.0
+CAM_MIN = -5.0
+CAM_MAX = 30.0
+
 
 class Patch:
     def __init__(self, mri_slice, h_l, h_u, w_l, w_u):
@@ -65,15 +68,18 @@ class MRIData:
     def __init__(self, phase=0):
         self.phase = phase
         if self.phase == 0:
-            self.data_list_path = train_0_csv
+            self.data_list_path = train_csv
         elif self.phase == 1:
-            self.data_list_path = train_1_csv
+            self.data_list_path = val_csv
         else:
             assert False, 'Invalid argument for phase. Choose from (0, 1)'
 
         data_list_df = pd.read_csv(self.data_list_path, header=None)
-        data_list_df.columns = ['path']
+        data_list_df.columns = ['path', 'label']
+        # random shuffle the rows
+        data_list_df.sample(frac=1).reset_index(drop=True)
         self.image_path_list = list(data_list_df['path'])
+        self.image_label_list = list(data_list_df['label'])
 
     def _get_acceptable(self, volume):
         [img_h, img_w, img_d] = volume.shape
@@ -102,6 +108,7 @@ class MRIData:
         The cropped patch is randomly selected.
         """
         nii = nibabel.load(self.image_path_list[index])
+        label = self.image_label_list[index]
         nii = nii.get_fdata()
         [img_h, img_w, img_d] = nii.shape
         # drop the bottom 25% and top 10% of the slices
@@ -114,7 +121,7 @@ class MRIData:
         nii.unsqueeze_(0)
         nii = nii.repeat(3, 1, 1)
         # return the mri patch and associated label
-        return nii, mri_patch, _slice
+        return nii, mri_patch, _slice, label
 
     def len(self):
         return len(self.image_path_list)
@@ -143,73 +150,7 @@ def getCAM(feature_conv, weight_fc, class_idx):
     return cam_img, cam
 
 
-def overlay_image_alpha(img, img_overlay, pos, alpha_mask):
-    """Overlay img_overlay on top of img at the position specified by
-    pos and blend using alpha_mask.
-
-    Alpha mask must contain values within the range [0, 1] and be the
-    same size as img_overlay.
-    """
-
-    x, y = pos
-
-    # Image ranges
-    y1, y2 = max(0, y), min(img.shape[0], y + img_overlay.shape[0])
-    x1, x2 = max(0, x), min(img.shape[1], x + img_overlay.shape[1])
-
-    # Overlay ranges
-    y1o, y2o = max(0, -y), min(img_overlay.shape[0], img.shape[0] - y)
-    x1o, x2o = max(0, -x), min(img_overlay.shape[1], img.shape[1] - x)
-
-    # Exit if nothing to do
-    if y1 >= y2 or x1 >= x2 or y1o >= y2o or x1o >= x2o:
-        return
-
-    channels = img.shape[2]
-
-    alpha = alpha_mask[y1o:y2o, x1o:x2o]
-    alpha_inv = 1.0 - alpha
-
-    for c in range(channels):
-        img[y1:y2, x1:x2, c] = (alpha * img_overlay[y1o:y2o, x1o:x2o, c] +
-                                alpha_inv * img[y1:y2, x1:x2, c])
-
-def overlay_transparent(background, overlay, x, y):
-
-    background_width = background.shape[1]
-    background_height = background.shape[0]
-
-    if x >= background_width or y >= background_height:
-        return background
-
-    h, w = overlay.shape[0], overlay.shape[1]
-
-    if x + w > background_width:
-        w = background_width - x
-        overlay = overlay[:, :w]
-
-    if y + h > background_height:
-        h = background_height - y
-        overlay = overlay[:h]
-
-    if overlay.shape[2] < 4:
-        overlay = np.concatenate(
-            [
-                overlay,
-                np.ones((overlay.shape[0], overlay.shape[1], 1), dtype = overlay.dtype) * 255
-            ],
-            axis = 2,
-        )
-
-    overlay_image = overlay[..., :3]
-    mask = overlay[..., 3:] / 255.0
-
-    background[y:y+h, x:x+w] = (1.0 - mask) * background[y:y+h, x:x+w] + mask * overlay_image
-
-    return background
-
-
-def grad_cam(image, _slice, mri_patch, model, _count):
+def grad_cam(image, _slice, mri_patch, model, _count, label):
     prediction_var = Variable((image.unsqueeze(0)).cuda(), requires_grad=True)
     # reference to the final layers, depends on the model class
     final_layer = model._modules.get('layer4')
@@ -236,7 +177,7 @@ def grad_cam(image, _slice, mri_patch, model, _count):
     w_u = mri_patch.w_u
     # overlay_resized = skimage.transform.resize(overlay, (patch_h, patch_w))
     overlay_resized = cv2.resize(overlay, (patch_h, patch_w))
-    overlay_resized = np.uint8(255*(overlay_resized-np.min(overlay_resized))/np.max(overlay_resized))
+    overlay_resized = np.uint8(255 * (overlay_resized - np.min(overlay_resized)) / np.max(overlay_resized))
     overlay_resized = cv2.applyColorMap(overlay_resized, cv2.COLORMAP_JET)
     my_slice = np.uint8(255*((_slice-np.min(_slice))/np.max(_slice)))
     # my_slice = cv2.applyColorMap(my_slice, cv2.COLORMAP_BONE)
@@ -257,12 +198,12 @@ def grad_cam(image, _slice, mri_patch, model, _count):
     # print(f'slice shape: {my_slice.shape}')
     # print(f'overlay shape: {overlay_resized.shape}')
     my_slice[h_l:h_u + 1, w_l:w_u + 1] = temp
-    fig = plt.figure()
+    # fig = plt.figure()
     cv2.imshow('grad-cam ', my_slice)
     cv2.waitKey(30)
-
-    fig_path = f'gradcam_normed/gradcam-{_count}.png'
-    print(fig_path)
+    fig_path = f'gradcam_normed/gradcam-{_count}-{label}.png'
+    # plt.savefig(fig_path)
+    print(label, fig_path)
     cv2.imwrite(fig_path, my_slice)
     return cam_raw
 
@@ -281,15 +222,16 @@ def main():
     n_items = dataset.len()
     # debug:
     # n_items = 1
-    cam_val = []
+    # cam_val = []
     for count in range(n_items):
-        image, mri_patch, _slice = dataset.getitem(count)
+        image, mri_patch, _slice, label = dataset.getitem(count)
         image = image.to(device, dtype=torch.float)
-        cam_raw = grad_cam(image, _slice, mri_patch, model, count)
-        cam_val.append(cam_raw.tolist())
-
-    print(np.max(cam_val))
-    print(np.min(cam_val))
+        cam_raw = grad_cam(image, _slice, mri_patch, model, count, label)
+        # print(f'label: {label}, max: {np.max(cam_raw)}, min:{np.min(cam_raw)}')
+        # cam_val.append(cam_raw.tolist())
+    # print('\n-------------------------------\n')
+    # print(np.max(cam_val))
+    # print(np.min(cam_val))
 
 if __name__=='__main__':
     main()

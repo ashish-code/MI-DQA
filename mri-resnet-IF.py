@@ -315,22 +315,23 @@ def iso_forest():
     # y_pred_outliers = clf.predict(X_outliers)
 
     # plot the line, the samples, and the nearest vectors to the plane
-    xx, yy = np.meshgrid(np.linspace(0, 4, 50), np.linspace(0, 4, 50))
+    xx, yy = np.meshgrid(np.linspace(-1, 4, 100), np.linspace(-1, 4, 100))
     Z = clf.decision_function(np.c_[xx.ravel(), yy.ravel()])
     Z = Z.reshape(xx.shape)
 
     plt.title("IsolationForest")
     plt.contourf(xx, yy, Z, cmap=plt.cm.Blues_r)
+    c = plt.scatter(X_outliers[:, 0], X_outliers[:, 1], c='red', alpha=0.6,
+                    s=20, edgecolor='k')
 
     b1 = plt.scatter(X_train[:, 0], X_train[:, 1], c='white', alpha=0.6,
                      s=20, edgecolor='k')
     b2 = plt.scatter(X_test[:, 0], X_test[:, 1], c='green', alpha=0.6,
                      s=20, edgecolor='k')
-    c = plt.scatter(X_outliers[:, 0], X_outliers[:, 1], c='red', alpha=0.6,
-                    s=20, edgecolor='k')
+
     plt.axis('tight')
-    plt.xlim((0, 4))
-    plt.ylim((0, 4))
+    plt.xlim((-1, 4))
+    plt.ylim((-1, 4))
     plt.legend([b1, b2, c],
                ["training acceptable",
                 "validation acceptable", "training artifact"],
