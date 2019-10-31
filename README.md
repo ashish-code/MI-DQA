@@ -15,7 +15,9 @@ Structural Magnetic Resonance Imaging (MRI) is the standard-of-care imaging moda
 ## Proof of Principle:
     (1) Data: Publicly available ABIDE-1 and DS030 MRI data was solely utilized in the development of this invention. ABIDE-1 is a multi-site dataset from which we used 15 sites for training our model and 2 sites as hold-out for validation. The DS030 is from 2 sites, which was utilized exclusively for testing our trained model.
     (2) DNN: A fully connected model with multiple blocks of linear transformation, batch normalization, ReLU activation and Dropout regularization was developed after extensive empirically driven configuration optimization towards a unique network architecture specific to QC for MRI using IQMs. The model architecture; experimental workflow block diagram; model training performance measures are illustrated below.
- ![IQA using DNN](https://www.dropbox.com/s/lo4iv76ff00dw1v/dnn.png?raw=0)
+ ![IQA using DNN](https://www.dropbox.com/s/lo4iv76ff00dw1v/dnn.png?raw=1)
     (3) Residual Network: A ResNet-18 based model is incorporated into our novel MRI artifact feature extraction method for QC. The proposed model is shown to automatically learn relevant low-level visual features that lead to superior performance for QC. The hyper-parameters of the network and methodology of data processing is determined after extensive experimentation and in conjunction with the architecture constitute a novel invention. The model architecture, performance analysis and visualization of the learning artifacts in MRI are illustrated below.
-![IQA using ResNet](https://www.dropbox.com/s/pvzcfl8jaogua7y/resnet.png?raw=0)
+![IQA using ResNet](https://www.dropbox.com/s/pvzcfl8jaogua7y/resnet.png?raw=1)
 
+We prove that our network is learning to distinguish between pristine MRI and MRI slices with artifacts, we show the gradient class activmation map based heatmap for random patches selected from MRI data that is rated by experts to be clean (top row) and have artifacts (bottom row). It seems evident that the network has learned to place emphasis on regions of MRI that have some artifacts in them. A sample is shown here:
+![Grad-CAM of clean and artifact MRI slices](https://www.dropbox.com/s/3v42cdna33c6xnh/networklearning.png?raw=1)
