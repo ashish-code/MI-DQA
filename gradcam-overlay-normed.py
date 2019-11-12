@@ -33,6 +33,7 @@ from skimage import color
 from skimage import io
 from skimage import img_as_float
 import cv2
+import seaborn as sns
 
 patch_h = 56
 patch_w = 56
@@ -199,13 +200,14 @@ def grad_cam(image, _slice, mri_patch, model, _count, label):
     # print(f'overlay shape: {overlay_resized.shape}')
     my_slice[h_l:h_u + 1, w_l:w_u + 1] = temp
     # fig = plt.figure()
-    cv2.imshow('grad-cam ', my_slice)
-    cv2.waitKey(30)
+    # cv2.imshow('grad-cam ', my_slice)
+    # cv2.waitKey(30)
     fig_path = f'gradcam_normed/gradcam-{_count}-{label}.png'
     # plt.savefig(fig_path)
-    print(label, fig_path)
-    cv2.imwrite(fig_path, my_slice)
+    # print(label, fig_path)
+    # cv2.imwrite(fig_path, my_slice)
     return cam_raw
+
 
 def main():
     # Get the pretrained model from checkpoint
@@ -222,17 +224,24 @@ def main():
     n_items = dataset.len()
     # debug:
     # n_items = 1
-    # cam_val = []
+    cam_val = np.zeros((n_items, 50))
     for count in range(n_items):
         image, mri_patch, _slice, label = dataset.getitem(count)
         image = image.to(device, dtype=torch.float)
         cam_raw = grad_cam(image, _slice, mri_patch, model, count, label)
+
         # print(f'label: {label}, max: {np.max(cam_raw)}, min:{np.min(cam_raw)}')
         # cam_val.append(cam_raw.tolist())
+        cam_val[count, :-1] = cam_raw
+        cam_val[count, -1] = label
+    cam_df = pd.DataFrame(cam_val)
+    cam_df.to_csv('sandbox/cam_df.csv')
+
     # print('\n-------------------------------\n')
     # print(np.max(cam_val))
     # print(np.min(cam_val))
 
-if __name__=='__main__':
+
+if __name__ == '__main__':
     main()
 
