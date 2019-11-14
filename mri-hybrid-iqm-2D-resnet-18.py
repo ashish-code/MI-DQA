@@ -37,12 +37,13 @@ with warnings.catch_warnings():
     warnings.filterwarnings('ignore')
     import nibabel
 
-train_csv = 'utils/train-hybrid-tesla.csv'
-val_csv = 'utils/val-hybrid-tesla.csv'
+train_csv = 'utils/train-hybrid-office.csv'
+val_csv = 'utils/val-hybrid-office.csv'
 test_csv = ''
-n_epoch = 1000
+n_epoch = 250
 patch_h = 56
 patch_w = 56
+iqm_dim = 64
 
 checkpoint_dir = './checkpoints/'
 ckpt_path = checkpoint_dir+'mri-hybrid-iqm-dqa-2d-resnet-18.pth'
@@ -72,7 +73,7 @@ class MRIData(Dataset):
         _row = self.df.iloc[idx, :]
         _label = int(_row['label'])
         _path = _row['mri_path']
-        _iqm = _row[1:66]
+        _iqm = _row[1:iqm_dim+1]
         nii = nibabel.load(_path)
         nii = nii.get_fdata()
         [img_h, img_w, img_d] = nii.shape
@@ -112,38 +113,150 @@ class MRIData(Dataset):
 #     print(ibatch, nii.shape, iqm.shape, label.shape)
 
 
-def main():
-    # If pre-trained model is saved, use it
-    if not os.path.exists(ckpt_path):
-        model_ft = models.resnet18(pretrained=True)
-        num_ftrs = model_ft.fc.in_features
-        model_ft.fc = nn.Linear(num_ftrs, 2)
-        # Observe that all parameters are being optimized
-        optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
-        # Decay LR by a factor of 0.1 every 7 epochs
-        exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=50, gamma=0.1)
-        epoch = 0
-        perf = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
-    # use the checkpoint
-    else:
-        model_ft = models.resnet18(pretrained=False)
-        num_ftrs = model_ft.fc.in_features
-        model_ft.fc = nn.Linear(num_ftrs, 2)
-        optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
-        exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=50, gamma=0.1)
+def train_model(model, criterion, optimizer, scheduler, epoch, perf, num_epochs=n_epoch):
+    since = time.time()
 
-        checkpoint = torch.load(ckpt_path)
-        model_ft.load_state_dict(checkpoint['model_state_dict'])
-        optimizer_ft.load_state_dict(checkpoint['optimizer_state_dict'])
-        epoch = checkpoint['epoch']
-        loss = checkpoint['loss']
-        exp_lr_scheduler.load_state_dict(checkpoint['scheduler'])
-        perf = torch.load(perf_path)
-        # resolving CPU vs GPU issue for optimzer.cuda()
-        for state in optimizer_ft.state.values():
-            for k,v in state.items():
-                if isinstance(v, torch.Tensor):
-                    state[k] = v.cuda()
+    best_model_wts = copy.deepcopy(model.state_dict())
+    best_acc = 0.0
+
+    while epoch < num_epochs:
+        epoch += 1
+        print('Epoch {}/{}'.format(epoch, num_epochs - 1))
+
+        # Each epoch has a training and validation phase
+        for phase in ['train', 'val']:
+            if phase == 'train':
+                model.train()  # Set model to training mode
+                dataset = MRIData(phase)
+                dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=1, drop_last=True)
+            else:
+                model.eval()  # Set model to evaluate mode
+                dataset = MRIData(phase)
+                dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=1, drop_last=True)
+
+            running_loss = 0.0
+            running_corrects = 0
+
+            # Iterate over data.
+            for ibatch, (images, iqms, labels) in enumerate(dataloader):
+                images = images.to(device, dtype=torch.float)
+                iqms = iqms.to(device, dtype=torch.float)
+                labels = labels.to(device, dtype=torch.long)
+
+                # zero the parameter gradients
+                optimizer.zero_grad()
+
+                # forward
+                # track history if only in train
+                with torch.set_grad_enabled(phase == 'train'):
+                    outputs = model(images, iqms)
+                    _, preds = torch.max(outputs, 1)
+                    loss = criterion(outputs, labels)
+
+                    # backward + optimize only if in training phase
+                    if phase == 'train':
+                        loss.backward()
+                        optimizer.step()
+
+                # statistics
+                running_loss += loss.item() * images.size(0)
+                running_corrects += torch.sum(preds == labels.data)
+            if phase == 'train':
+                scheduler.step()
+
+            epoch_loss = running_loss / (ibatch * 32)
+            epoch_acc = running_corrects.double() / (ibatch * 32)
+
+            print('{} Loss: {:.4f} Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc))
+            if phase == 'train':
+                perf['train_loss'].append(epoch_loss)
+                perf['train_acc'].append(epoch_acc)
+            else:
+                perf['val_loss'].append(epoch_loss)
+                perf['val_acc'].append(epoch_acc)
+
+            # deep copy the model
+            if phase == 'val' and epoch_acc > best_acc:
+                best_acc = epoch_acc
+                best_model_wts = copy.deepcopy(model.state_dict())
+
+        torch.save({'train_loss': perf['train_loss'],
+                    'train_acc': perf['train_acc'], 'val_loss': perf['val_loss'],
+                    'val_acc': perf['val_acc']}, perf_path)
+        # save checkpoint
+        if epoch % 10 == 0:
+            # print(' -- writing checkpoint and performance files -- ')
+            torch.save({'epoch': epoch, 'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(), 'loss': loss,
+                        'scheduler': scheduler.state_dict()}, ckpt_path)
+
+    time_elapsed = time.time() - since
+    print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
+    print('Best val Acc: {:4f}'.format(best_acc))
+
+    # load best model weights
+    model.load_state_dict(best_model_wts)
+    return model
+
+
+# hybrid network model class
+class HybridNet(nn.Module):
+    def __init__(self):
+        super(HybridNet, self).__init__()
+        self.cnn = models.resnet18(pretrained=True)
+        self.cnn.fc = nn.Linear(self.cnn.fc.in_features, 512)
+        self.fc1 = nn.Linear(512+iqm_dim, 256)
+        self.fc2 = nn.Linear(256, 2)
+
+    def forward(self, image, iqm):
+        x1 = self.cnn(image)
+        x2 = iqm
+        x = torch.cat((x1, x2), dim=1)
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
+
+def main():
+
+    model_ft = HybridNet()
+    optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
+    # Decay LR by a factor of 0.1 every 7 epochs
+    exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=50, gamma=0.1)
+    epoch = 0
+    perf = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
+
+
+    # if not os.path.exists(ckpt_path):
+    #     model_ft = models.resnet18(pretrained=True)
+    #     num_ftrs = model_ft.fc.in_features
+    #     model_ft.fc = nn.Linear(num_ftrs, 2)
+    #     # Observe that all parameters are being optimized
+    #     optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
+    #     # Decay LR by a factor of 0.1 every 7 epochs
+    #     exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=50, gamma=0.1)
+    #     epoch = 0
+    #     perf = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
+    # # use the checkpoint
+    # else:
+    #     model_ft = models.resnet18(pretrained=False)
+    #     num_ftrs = model_ft.fc.in_features
+    #     model_ft.fc = nn.Linear(num_ftrs, 2)
+    #     optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
+    #     exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=50, gamma=0.1)
+    #
+    #     checkpoint = torch.load(ckpt_path)
+    #     model_ft.load_state_dict(checkpoint['model_state_dict'])
+    #     optimizer_ft.load_state_dict(checkpoint['optimizer_state_dict'])
+    #     epoch = checkpoint['epoch']
+    #     loss = checkpoint['loss']
+    #     exp_lr_scheduler.load_state_dict(checkpoint['scheduler'])
+    #     perf = torch.load(perf_path)
+    #     # resolving CPU vs GPU issue for optimzer.cuda()
+    #     for state in optimizer_ft.state.values():
+    #         for k,v in state.items():
+    #             if isinstance(v, torch.Tensor):
+    #                 state[k] = v.cuda()
 
     criterion = nn.CrossEntropyLoss()
     model_ft = model_ft.to(device)

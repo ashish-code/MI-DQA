@@ -214,26 +214,29 @@ def train_model(model, criterion, optimizer, scheduler, epoch, perf, num_epochs=
 def main():
     model_ft = models.resnet18(pretrained=False)
     num_ftrs = model_ft.fc.in_features
-
+    model_ft.fc = nn.Linear(num_ftrs, 2)
     optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
     exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=20, gamma=0.1)
 
     checkpoint = torch.load(ckpt_path_in)
     model_ft.load_state_dict(checkpoint['model_state_dict'])
-    optimizer_ft.load_state_dict(checkpoint['optimizer_state_dict'])
-    epoch = checkpoint['epoch']
-    loss = checkpoint['loss']
+    # optimizer_ft.load_state_dict(checkpoint['optimizer_state_dict'])
+    epoch = 0
+    # loss = checkpoint['loss']
     exp_lr_scheduler.load_state_dict(checkpoint['scheduler'])
-    perf = torch.load(perf_path)
+    if os.path.exists(perf_path):
+        perf = torch.load(perf_path)
+    else:
+        perf = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
     # resolving CPU vs GPU issue for optimzer.cuda()
-    for state in optimizer_ft.state.values():
-        for k, v in state.items():
-            if isinstance(v, torch.Tensor):
-                state[k] = v.cuda()
+    # for state in optimizer_ft.state.values():
+    #     for k, v in state.items():
+    #         if isinstance(v, torch.Tensor):
+    #             state[k] = v.cuda()
 
     # switch off training for the feature extraction layers
-    for param in model_ft.parameters():
-        param.require_grad = False
+    # for param in model_ft.parameters():
+    #     param.require_grad = False
 
     # define a new FC layer for TL
     fc = nn.Sequential(
@@ -243,11 +246,17 @@ def main():
         nn.Linear(128, 2)
     )
 
-    model_ft.classifier = fc
+    model_ft.fc = fc
+
+    for _itr, _child in enumerate(model_ft.children()):
+        if _itr <= 8:
+            for param in _child.parameters():
+                param.require_grad = False
+
 
     criterion = nn.CrossEntropyLoss()
     model_ft = model_ft.to(device)
-    model_ft = train_model(model_ft, criterion, optimizer_ft, exp_lr_scheduler, epoch, perf, num_epochs=n_epoch)
+    model_ft = train_model(model_ft, criterion, optimizer_ft, exp_lr_scheduler, epoch, perf, num_epochs=500)
 
 
 if __name__ == '__main__':
