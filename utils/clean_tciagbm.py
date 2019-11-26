@@ -35,6 +35,16 @@ tciagmb_df = pd.read_excel(xlsxfile_path, header=None)
 
 tciagmb_df.columns = ['name', 'date', 'a', 'u1', 'u2']
 
+# drop subjects with missing slices
+
+
+missing_idx = tciagmb_df[tciagmb_df['u1'].str.contains('missing', case=False, na=False)].index
+tciagmb_df.drop(missing_idx, inplace=True)
+print(tciagmb_df.shape)
+missing_idx = tciagmb_df[tciagmb_df['u2'].str.contains('missing', case=False, na=False)].index
+tciagmb_df.drop(missing_idx, inplace=True)
+print(tciagmb_df.shape)
+
 tciagmb_df['u1'][tciagmb_df['u1'].notna()] = 1.0
 tciagmb_df['u2'][tciagmb_df['u2'].notna()] = 1.0
 tciagmb_df = tciagmb_df.fillna(0.0)
@@ -63,10 +73,27 @@ tciagmb_df['dtstr'] = tciagmb_df['date'].apply(lambda x: str(x).split(' ')[0])
 tciagmb_df['full_name'] = tciagmb_df[['name','dtstr']].apply(lambda x: '-'.join(x), axis=1)
 tciagmb_2 = tciagmb_df[['full_name', 'a']]
 tciagmb_2.columns = ['name', 'label']
-print(tciagmb_df.head())
-print(tciagmb_2.head())
+
+# Remove subjects with empty dicom content
+empty_idx_list = []
+for idx, row in tciagmb_df.iterrows():
+    name = row['name']
+    date_str = row['dtstr']
+    out_dir_name = f'{name}-{date_str}'
+    out_dir_name = dest_root + out_dir_name +'/'
+    if len(os.listdir(out_dir_name))==0:
+        empty_idx_list.append(idx)
+
+print(empty_idx_list)
+
 print(tciagmb_2.label.value_counts())
-# tciagmb_2.to_csv(dest_root+'tcia-gbm.csv', header=False, index=False)
+tciagmb_2 = tciagmb_2.drop(empty_idx_list)
+print(tciagmb_2.label.value_counts())
+
+
+# print(tciagmb_df.head())
+# print(tciagmb_2.label.value_counts())
+tciagmb_2.to_csv(dest_root+'tcia-gbm.csv', header=False, index=False)
 
 """
 for idx, row in tciagmb_df.iterrows():

@@ -40,15 +40,20 @@ from skimage import io
 from skimage import img_as_float
 import cv2
 import seaborn as sns
+import pydicom
+import warnings
+warnings.filterwarnings('ignore')
 
-n_epoch = 500
+n_epoch = 100
 patch_h = 56
 patch_w = 56
+
+batch_size = 16
 
 checkpoint_dir = './checkpoints/'
 ckpt_path_in = checkpoint_dir+'mri-dqa-2d-resnet-18-rot-onbrain.pth'
 ckpt_path = checkpoint_dir+'resnet-18-TL-TCIA.pth'
-perf_path = checkpoint_dir+'resnet-18-TL-TCIA.perf'
+perf_path = checkpoint_dir+'resnet-18-TL-TCIA-3.perf'
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # DS030 MRI samples
@@ -73,7 +78,7 @@ class MRIData(Dataset):
         self.image_label_list = list(data_list_df['label'])
 
     def _get_acceptable(self, patch):
-        [img_h, img_w, img_d] = patch.shape
+        [img_h, img_w] = patch.shape
         # extract random slice and random patch
         acceptable = False
         while not acceptable:
@@ -81,13 +86,22 @@ class MRIData(Dataset):
             h_u = int(h_l + patch_h - 1)
             w_l = int(random.randint(0, img_w - patch_w))
             w_u = int(w_l + patch_w - 1)
-            d = int(random.randint(0, img_d - 1))
-            patch_t = patch[h_l:h_u, w_l:w_u, d]
+
+            patch_t = patch[h_l:h_u, w_l:w_u]
             # select patch if overlapping sufficient region of brain
             patch_bg = patch_t < 64
             if patch_bg.sum() < 0.075 * patch_w * patch_h:
                 acceptable = True
 
+        return patch_t
+
+    def _get_patch(self, patch):
+        [img_h, img_w] = patch.shape
+        h_l = int(random.randint(0, img_h - patch_h))
+        h_u = int(h_l + patch_h - 1)
+        w_l = int(random.randint(0, img_w - patch_w))
+        w_u = int(w_l + patch_w - 1)
+        patch_t = patch[h_l:h_u, w_l:w_u]
         return patch_t
 
     def __getitem__(self, index):
@@ -98,21 +112,34 @@ class MRIData(Dataset):
         """
         dir_name = self.image_path_list[index]
         dcm_file_list = os.listdir(root_dir+dir_name)
-        dcm_file_list = [root_dir + dir_name + '/' + itm for itm in dcm_file_list]
-        dcm_file_path = random.choice(dcm_file_list)
-        nii = nibabel.load(dcm_file_path)
-        label = self.image_label_list[index]
-        nii = nii.get_fdata()
-        [img_h, img_w, img_d] = nii.shape
-        # drop the bottom 25% and top 10% of the slices
-        nii = nii[:, :, int(img_d / 4):int(9 * img_d / 10)]
-        nii = self._get_acceptable(nii)
+        dcm_file_list = [root_dir + dir_name + '/' + itm for itm in dcm_file_list if '.dcm' in itm]
+        if len(dcm_file_list) == 0:
+            print(f'empty list {dir_name}')
 
-        # random rotation to the patch
-        rot_angle = 45 * random.randint(0, 3)
-        nii = scipy.ndimage.rotate(nii, angle=rot_angle, reshape=True)
-        # resize
-        nii = scipy.misc.imresize(nii, (224, 224))
+        label = self.image_label_list[index]
+        """
+        Some dicom files are missing pixel data
+        skip .dcm files smaller than 10KB
+        """
+        choice_resample = True
+        while choice_resample:
+            dcm_file_path = random.choice(dcm_file_list)
+            if os.stat(dcm_file_path).st_size > 5000:
+                choice_resample = False
+            try:
+                imgdata = pydicom.dcmread(dcm_file_path)
+                nii = imgdata.pixel_array
+                [img_h, img_w] = nii.shape
+                # relax acceptability criterion
+                nii = self._get_patch(nii)
+                # random rotation to the patch
+                rot_angle = 45 * random.randint(0, 3)
+                nii = scipy.ndimage.rotate(nii, angle=rot_angle, reshape=True)
+                # resize
+                nii = scipy.misc.imresize(nii, (224, 224))
+            except:
+                choice_resample = True
+
         # convert to pytorch tensor
         nii = torch.tensor(nii)
         nii.unsqueeze_(0)
@@ -142,11 +169,11 @@ def train_model(model, criterion, optimizer, scheduler, epoch, perf, num_epochs=
                 model.train()  # Set model to training mode
 
                 dataset = MRIData(phase)
-                dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=1, drop_last=True)
+                dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=1, drop_last=True)
             else:
                 model.eval()  # Set model to evaluate mode
                 dataset = MRIData(phase)
-                dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=1, drop_last=True)
+                dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=1, drop_last=True)
 
             running_loss = 0.0
             running_corrects = 0
@@ -177,8 +204,8 @@ def train_model(model, criterion, optimizer, scheduler, epoch, perf, num_epochs=
             if phase == 'train':
                 scheduler.step()
 
-            epoch_loss = running_loss / (ibatch * 32)
-            epoch_acc = running_corrects.double() / (ibatch * 32)
+            epoch_loss = running_loss / (ibatch * batch_size)
+            epoch_acc = running_corrects.double() / (ibatch * batch_size)
 
             print('{} Loss: {:.4f} Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc))
             if phase == 'train':
@@ -260,7 +287,7 @@ def main():
 
     criterion = nn.CrossEntropyLoss()
     model_ft = model_ft.to(device)
-    model_ft = train_model(model_ft, criterion, optimizer_ft, exp_lr_scheduler, epoch, perf, num_epochs=500)
+    model_ft = train_model(model_ft, criterion, optimizer_ft, exp_lr_scheduler, epoch, perf, num_epochs=n_epoch)
 
 
 if __name__ == '__main__':
