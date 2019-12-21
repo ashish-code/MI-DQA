@@ -17,7 +17,6 @@ from torchvision import datasets
 from torchvision import transforms
 from torchvision import models
 
-
 import numpy as np
 import os
 import random
@@ -34,7 +33,7 @@ import nibabel
 
 train_csv = 'train-office.csv'
 val_csv = 'val-office.csv'
-n_epoch = 500
+n_epoch = 250
 patch_h = 56
 patch_w = 56
 

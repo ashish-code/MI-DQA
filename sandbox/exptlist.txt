@@ -1,0 +1,14 @@
+(1) ResNet 18,34,50,101 : use imagenet pre-trained model : effect of depth
+(2) DenseNet18, ResNet18, InceptionNet, pre-trained models: effect of architecture
+(3) Geometric augmentation vs. regular: noise vs. background modeling with augmentation
+(4) Cross-validation on 17 sites of ABIDE-1
+(5) Transfer-learning for DS030
+(6) Transfer-Learning for TCIA-GBM
+(7) ResNet-IQM Hybrid model
+    (a) cross-validated on ABIDE-1
+    (b) transfer-learning on DS030
+    (c) transfer-learning on TCIA-GBM requires computation of IQM
+(8) Visualization: Grad-CAM for entire slice, normalize the weights
+
+--
+(9) 

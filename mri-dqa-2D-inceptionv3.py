@@ -1,84 +1,71 @@
 """
-Transfer Learning with pre-trained resnet18 on ABIDE 1 dataset training sites.
-TL on TCIA-GBM dataset.
-
-author: ashish gupta
-email: ashishagupta@gmail.com
-date: 11/21/2019
+mri-dqa
 """
 
+# DL Library
 import torch
 from torch import nn
-import matplotlib.pyplot as plt
-from matplotlib.pyplot import imshow
-from torchvision import models
+from torch.nn import CrossEntropyLoss
 from torch import optim
 from torch.optim import lr_scheduler
-from torchvision import transforms
-from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import Dataset
-from torch.nn import functional as F
-from torch import topk
-import numpy as np
+from torch.autograd import Variable
+import torch.nn.functional as F
 
+from torchvision import datasets
+from torchvision import transforms
+from torchvision import models
+
+import numpy as np
+import os
+import random
+import pandas as pd
+import matplotlib.pyplot as plt
+import math
+import scipy.misc
+import scipy.ndimage
+import time 
+import copy
+
+# Nifti I/O
 import warnings
 with warnings.catch_warnings():
     warnings.filterwarnings('ignore')
     import nibabel
 
-import os
-import random
-import pandas as pd
-import math
-import scipy.misc
-import time
-import copy
-import skimage.transform
-from skimage import color
-from skimage import io
-from skimage import img_as_float
-import cv2
-import seaborn as sns
-import pydicom
-import warnings
-warnings.filterwarnings('ignore')
 
-n_epoch = 100
-patch_h = 112
-patch_w = 112
-
-batch_size = 20
+train_csv = 'train-office.csv'
+val_csv = 'val-office.csv'
+n_epoch = 250
+patch_h = 56
+patch_w = 56
+input_size = 299
+num_classes = 2
 
 checkpoint_dir = './checkpoints/'
-ckpt_path_in = checkpoint_dir+'mri-dqa-2d-resnet-18-rot-onbrain.pth'
-ckpt_path = checkpoint_dir+'resnet-18-TL-TCIA.pth'
-perf_path = checkpoint_dir+'resnet-18-TL-TCIA-4.perf'
+ckpt_path = checkpoint_dir+'mri-dqa-2d-inceptionv3.pth'
+perf_path = checkpoint_dir+'mri-dqa-2d-inceptionv3.perf'
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-# DS030 MRI samples
-train_csv = 'tcia-train.csv'
-val_csv = 'tcia-val.csv'
-root_dir = 'D:/Datasets/TCIA-GBM-2/'
 
 # -- DataSet Class -----------------------------------
 class MRIData(Dataset):
     def __init__(self, phase='train'):
         self.phase = phase
-        if self.phase == 'train':
+        if self.phase=='train':
             self.data_list_path = train_csv
-        elif self.phase == 'val':
+        elif self.phase=='val':
             self.data_list_path = val_csv
         else:
             assert False, 'Invalid argument for phase. Choose from (train, val)'
-
+        
         data_list_df = pd.read_csv(self.data_list_path, header=None)
         data_list_df.columns = ['path', 'label']
         self.image_path_list = list(data_list_df['path'])
         self.image_label_list = list(data_list_df['label'])
 
     def _get_acceptable(self, patch):
-        [img_h, img_w] = patch.shape
+        [img_h, img_w, img_d] = patch.shape
         # extract random slice and random patch
         acceptable = False
         while not acceptable:
@@ -86,60 +73,34 @@ class MRIData(Dataset):
             h_u = int(h_l + patch_h - 1)
             w_l = int(random.randint(0, img_w - patch_w))
             w_u = int(w_l + patch_w - 1)
-
-            patch_t = patch[h_l:h_u, w_l:w_u]
+            d = int(random.randint(0, img_d - 1))
+            patch_t = patch[h_l:h_u, w_l:w_u, d]
             # select patch if overlapping sufficient region of brain
             patch_bg = patch_t < 64
             if patch_bg.sum() < 0.075 * patch_w * patch_h:
                 acceptable = True
 
         return patch_t
-
-    def _get_patch(self, patch):
-        [img_h, img_w] = patch.shape
-        h_l = int(random.randint(0, img_h - patch_h))
-        h_u = int(h_l + patch_h - 1)
-        w_l = int(random.randint(0, img_w - patch_w))
-        w_u = int(w_l + patch_w - 1)
-        patch_t = patch[h_l:h_u, w_l:w_u]
-        return patch_t
-
+    
     def __getitem__(self, index):
         """
         Returns a patch of a slice from MRI volume
         The volume is selected by the inpurt argument index. The slice is randomly selected.
         The cropped patch is randomly selected.
         """
-        dir_name = self.image_path_list[index]
-        dcm_file_list = os.listdir(root_dir+dir_name)
-        dcm_file_list = [root_dir + dir_name + '/' + itm for itm in dcm_file_list if '.dcm' in itm]
-        if len(dcm_file_list) == 0:
-            print(f'empty list {dir_name}')
-
+        nii = nibabel.load(self.image_path_list[index])
         label = self.image_label_list[index]
-        """
-        Some dicom files are missing pixel data
-        skip .dcm files smaller than 10KB
-        """
-        choice_resample = True
-        while choice_resample:
-            dcm_file_path = random.choice(dcm_file_list)
-            if os.stat(dcm_file_path).st_size > 5000:
-                choice_resample = False
-            try:
-                imgdata = pydicom.dcmread(dcm_file_path)
-                nii = imgdata.pixel_array
-                [img_h, img_w] = nii.shape
-                # relax acceptability criterion
-                nii = self._get_patch(nii)
-                # random rotation to the patch
-                rot_angle = 45 * random.randint(0, 3)
-                nii = scipy.ndimage.rotate(nii, angle=rot_angle, reshape=True)
-                # resize
-                nii = scipy.misc.imresize(nii, (224, 224))
-            except:
-                choice_resample = True
+        nii = nii.get_fdata()
+        [img_h, img_w, img_d] = nii.shape
+        # drop the bottom 25% and top 10% of the slices
+        nii = nii[:,:,int(img_d/4):int(9*img_d/10)]
+        nii = self._get_acceptable(nii)
 
+        # random rotation to the patch
+        rot_angle = 45*random.randint(0, 3)
+        nii = scipy.ndimage.rotate(nii, angle=rot_angle, reshape=True)
+        # resize
+        nii = scipy.misc.imresize(nii, (input_size, input_size))
         # convert to pytorch tensor
         nii = torch.tensor(nii)
         nii.unsqueeze_(0)
@@ -150,9 +111,8 @@ class MRIData(Dataset):
     def __len__(self):
         return len(self.image_label_list)
 
-# -- DataSet Class <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+# -- DataSet Class -----------------------------------
 
-# -- Training Model >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 def train_model(model, criterion, optimizer, scheduler, epoch, perf, num_epochs=n_epoch):
     since = time.time()
 
@@ -169,11 +129,11 @@ def train_model(model, criterion, optimizer, scheduler, epoch, perf, num_epochs=
                 model.train()  # Set model to training mode
 
                 dataset = MRIData(phase)
-                dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=1, drop_last=True)
+                dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=1, drop_last=True)
             else:
-                model.eval()  # Set model to evaluate mode
+                model.eval()   # Set model to evaluate mode
                 dataset = MRIData(phase)
-                dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=1, drop_last=True)
+                dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=1, drop_last=True)
 
             running_loss = 0.0
             running_corrects = 0
@@ -189,7 +149,11 @@ def train_model(model, criterion, optimizer, scheduler, epoch, perf, num_epochs=
                 # forward
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
-                    outputs = model(inputs)
+                    if phase == 'train':
+                        outputs, _ = model(inputs)
+                    else:
+                        outputs = model(inputs)
+
                     _, preds = torch.max(outputs, 1)
                     loss = criterion(outputs, labels)
 
@@ -204,11 +168,11 @@ def train_model(model, criterion, optimizer, scheduler, epoch, perf, num_epochs=
             if phase == 'train':
                 scheduler.step()
 
-            epoch_loss = running_loss / (ibatch * batch_size)
-            epoch_acc = running_corrects.double() / (ibatch * batch_size)
+            epoch_loss = running_loss / (ibatch*32)
+            epoch_acc = running_corrects.double() / (ibatch*32)
 
             print('{} Loss: {:.4f} Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc))
-            if phase == 'train':
+            if phase=='train':
                 perf['train_loss'].append(epoch_loss)
                 perf['train_acc'].append(epoch_acc)
             else:
@@ -219,6 +183,8 @@ def train_model(model, criterion, optimizer, scheduler, epoch, perf, num_epochs=
             if phase == 'val' and epoch_acc > best_acc:
                 best_acc = epoch_acc
                 best_model_wts = copy.deepcopy(model.state_dict())
+        
+        print()
 
         # save performance
         torch.save({'train_loss': perf['train_loss'],
@@ -226,11 +192,13 @@ def train_model(model, criterion, optimizer, scheduler, epoch, perf, num_epochs=
                     'val_acc': perf['val_acc']}, perf_path)
 
         # save checkpoint every 10 epochs
-        if epoch % 10 == 0:
+        if epoch%10 == 0:
             print(' -- writing checkpoint and performance files -- ')
             torch.save({'epoch': epoch, 'model_state_dict': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(), 'loss': loss,
-                        'scheduler': scheduler.state_dict()}, ckpt_path)
+            'optimizer_state_dict':optimizer.state_dict(), 'loss': loss,
+            'scheduler': scheduler.state_dict()}, ckpt_path)
+
+
 
     time_elapsed = time.time() - since
     print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
@@ -240,50 +208,47 @@ def train_model(model, criterion, optimizer, scheduler, epoch, perf, num_epochs=
     model.load_state_dict(best_model_wts)
     return model
 
-# << Training Model <<<<<<<<<<<<<<<<<<<<<<<<
 
 def main():
-    model_ft = models.resnet18(pretrained=False)
-    num_ftrs = model_ft.fc.in_features
-    model_ft.fc = nn.Linear(num_ftrs, 2)
-    optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
-    exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=20, gamma=0.1)
-
-    checkpoint = torch.load(ckpt_path_in)
-    model_ft.load_state_dict(checkpoint['model_state_dict'])
-    # optimizer_ft.load_state_dict(checkpoint['optimizer_state_dict'])
-    epoch = 0
-    # loss = checkpoint['loss']
-    exp_lr_scheduler.load_state_dict(checkpoint['scheduler'])
-    if os.path.exists(perf_path):
-        perf = torch.load(perf_path)
-    else:
+    # If pretrained model is saved, use it
+    if not os.path.exists(ckpt_path):
+        model_ft = models.inception_v3(pretrained=True)
+        # Handle the auxilary net
+        num_ftrs = model_ft.AuxLogits.fc.in_features
+        model_ft.AuxLogits.fc = nn.Linear(num_ftrs, num_classes)
+        # Handle the primary net
+        num_ftrs = model_ft.fc.in_features
+        model_ft.fc = nn.Linear(num_ftrs, num_classes)
+        # Observe that all parameters are being optimized
+        optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
+        # Decay LR by a factor of 0.1 every 7 epochs
+        exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=50, gamma=0.1)
+        epoch = 0
         perf = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
-    # resolving CPU vs GPU issue for optimzer.cuda()
-    # for state in optimizer_ft.state.values():
-    #     for k, v in state.items():
-    #         if isinstance(v, torch.Tensor):
-    #             state[k] = v.cuda()
 
-    # switch off training for the feature extraction layers
-    # for param in model_ft.parameters():
-    #     param.require_grad = False
+    else:
+        model_ft = models.inception_v3(pretrained=False)
+        # Handle the auxilary net
+        num_ftrs = model_ft.AuxLogits.fc.in_features
+        model_ft.AuxLogits.fc = nn.Linear(num_ftrs, num_classes)
+        # Handle the primary net
+        num_ftrs = model_ft.fc.in_features
+        model_ft.fc = nn.Linear(num_ftrs, num_classes)
+        optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
+        exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=50, gamma=0.1)
 
-    # define a new FC layer for TL
-    fc = nn.Sequential(
-        nn.Linear(num_ftrs, 32),
-        nn.ReLU(),
-        nn.Dropout(0.1),
-        nn.Linear(32, 2)
-    )
-
-    model_ft.fc = fc
-
-    for _itr, _child in enumerate(model_ft.children()):
-        if _itr <= 8:
-            for param in _child.parameters():
-                param.require_grad = False
-
+        checkpoint = torch.load(ckpt_path)
+        model_ft.load_state_dict(checkpoint['model_state_dict'])
+        optimizer_ft.load_state_dict(checkpoint['optimizer_state_dict'])
+        epoch = checkpoint['epoch']
+        loss = checkpoint['loss']
+        exp_lr_scheduler.load_state_dict(checkpoint['scheduler'])
+        perf = torch.load(perf_path)
+        # resolving CPU vs GPU issue for optimzer.cuda()
+        for state in optimizer_ft.state.values():
+            for k,v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.cuda()
 
     criterion = nn.CrossEntropyLoss()
     model_ft = model_ft.to(device)
