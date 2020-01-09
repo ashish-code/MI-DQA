@@ -95,6 +95,9 @@ print(tciagmb_2.label.value_counts())
 # print(tciagmb_2.label.value_counts())
 tciagmb_2.to_csv(dest_root+'tcia-gbm.csv', header=False, index=False)
 
+
+
+
 """
 for idx, row in tciagmb_df.iterrows():
     name = row['name']

@@ -16,7 +16,12 @@ from torch.nn import functional as F
 from torch import topk
 import numpy as np
 
+
+import pydicom
 import warnings
+warnings.filterwarnings('ignore')
+
+
 with warnings.catch_warnings():
     warnings.filterwarnings('ignore')
     import nibabel
@@ -37,12 +42,10 @@ import seaborn as sns
 
 patch_h = 56
 patch_w = 56
-# train_csv = 'train-office.csv'
-# val_csv = 'val-office.csv'
 
-train_csv = 'ds030-train.csv'
-val_csv = 'ds030-val.csv'
-
+train_csv = 'tcia-train.csv'
+val_csv = 'tcia-val.csv'
+root_dir = 'D:/Datasets/TCIA-GBM-2/'
 
 checkpoint_dir = './checkpoints/'
 ckpt_path = checkpoint_dir+'mri-dqa-2d-resnet-18-rot-onbrain.pth'
@@ -73,6 +76,7 @@ class MRIData:
             assert False, 'Invalid argument for phase. Choose from (0, 1)'
 
         data_list_df = pd.read_csv(self.data_list_path, header=None)
+
         data_list_df.columns = ['path', 'label']
         # random shuffle the rows
         data_list_df.sample(frac=1).reset_index(drop=True)
@@ -84,20 +88,51 @@ class MRIData:
         # extract random mri_slice and random patch
         acceptable = False
         while not acceptable:
-            # h_l = int(random.randint(0, img_h - patch_h))
-            # h_u = int(h_l + patch_h - 1)
-            # w_l = int(random.randint(0, img_w - patch_w))
-            # w_u = int(w_l + patch_w - 1)
+            h_l = int(random.randint(0, img_h - patch_h))
+            h_u = int(h_l + patch_h - 1)
+            w_l = int(random.randint(0, img_w - patch_w))
+            w_u = int(w_l + patch_w - 1)
             d = int(random.randint(0, img_d - 1))
             _slice = volume[:, :, d]
-            # mri_slice = volume[h_l:h_u, w_l:w_u, d]
-            mri_slice = volume[:, :, d]
-            mri_patch = Patch(mri_slice, 0, img_h, 0, img_w)
-            acceptable = True
+            mri_slice = volume[h_l:h_u, w_l:w_u, d]
+            mri_patch = Patch(mri_slice, h_l, h_u, w_l, w_u)
             # select patch if overlapping sufficient region of brain
-            # patch_bg = mri_slice < 64
-            # if patch_bg.sum() < 0.075 * patch_w * patch_h:
-            #     acceptable = True
+            patch_bg = mri_slice < 32
+            if patch_bg.sum() < 0.075 * patch_w * patch_h:
+                acceptable = True
+
+        return _slice, mri_patch
+
+    def _get_patch(self, patch):
+        [img_h, img_w] = patch.shape
+
+        acceptable = False
+        while not acceptable:
+            h_l = int(random.randint(0, img_h - patch_h))
+            h_u = int(h_l + patch_h - 1)
+            w_l = int(random.randint(0, img_w - patch_w))
+            w_u = int(w_l + patch_w - 1)
+
+            _slice = patch[:, :]
+            mri_slice = patch[h_l:h_u, w_l:w_u]
+            mri_patch = Patch(mri_slice, h_l, h_u, w_l, w_u)
+
+            patch_bg = mri_slice < 64
+            # print(patch_bg.sum()/(patch_w * patch_h))
+            if patch_bg.sum() < 0.5 * patch_w * patch_h:
+                acceptable = True
+
+
+        # h_l = int(random.randint(0, img_h - patch_h))
+        # h_u = int(h_l + patch_h - 1)
+        # w_l = int(random.randint(0, img_w - patch_w))
+        # w_u = int(w_l + patch_w - 1)
+        #
+        # _slice = patch[:, :]
+        # mri_slice = patch[h_l:h_u, w_l:w_u]
+        # mri_patch = Patch(mri_slice, h_l, h_u, w_l, w_u)
+
+        # patch_t = patch[h_l:h_u, w_l:w_u]
         return _slice, mri_patch
 
     def getitem(self, index):
@@ -106,16 +141,40 @@ class MRIData:
         The volume is selected by the input argument index. The slice is randomly selected.
         The cropped patch is randomly selected.
         """
-        nii = nibabel.load(self.image_path_list[index])
         label = self.image_label_list[index]
-        nii = nii.get_fdata()
-        [img_h, img_w, img_d] = nii.shape
-        # drop the bottom 25% and top 10% of the slices
-        nii = nii[:, :, int(5 * img_d / 10):int(7 * img_d / 10)]
-        _slice, mri_patch = self._get_acceptable(nii)
-        # resize
-        nii = skimage.transform.resize(mri_patch.mri_slice, (224, 224))
-        # convert to pytorch tensor
+        dir_name = self.image_path_list[index]
+        dcm_file_list = os.listdir(root_dir + dir_name)
+        dcm_file_list = [root_dir + dir_name + '/' + itm for itm in dcm_file_list if '.dcm' in itm]
+        if len(dcm_file_list) == 0:
+            print(f'empty list {dir_name}')
+
+        label = self.image_label_list[index]
+        """
+        Some dicom files are missing pixel data
+        skip .dcm files smaller than 10KB
+        """
+        choice_resample = True
+        resample_count = 0
+        while choice_resample and resample_count < 100:
+            dcm_file_path = random.choice(dcm_file_list)
+            print(dcm_file_path)
+            if os.stat(dcm_file_path).st_size > 10000:
+                choice_resample = False
+
+                try:
+                    imgdata = pydicom.dcmread(dcm_file_path)
+                    nii = imgdata.pixel_array
+                    [img_h, img_w] = nii.shape
+                    # relax acceptability criterion
+
+                    _slice, mri_patch = self._get_patch(nii)
+
+                    # resize
+                    nii = scipy.misc.imresize(mri_patch.mri_slice, (224, 224))
+                except:
+                    choice_resample = True
+            resample_count += 1
+
         nii = torch.tensor(nii)
         nii.unsqueeze_(0)
         nii = nii.repeat(3, 1, 1)
@@ -168,19 +227,21 @@ def grad_cam(image, _slice, mri_patch, model, _count, label):
     # img = image[0, :, :].cpu().numpy()
     img = mri_patch.mri_slice
     # print(f'mri_slice shape: {img.shape}')
-    img_h, img_w = img.shape
+
     # print(f'type img: {type(img)}')
     h_l = mri_patch.h_l
     h_u = mri_patch.h_u
     w_l = mri_patch.w_l
     w_u = mri_patch.w_u
     # overlay_resized = skimage.transform.resize(overlay, (patch_h, patch_w))
-    overlay_resized = cv2.resize(overlay, (img_w, img_h))
-    overlay_resized = np.uint8(255 * (overlay_resized - np.min(overlay_resized)) / np.max(overlay_resized))
-    overlay_resized = cv2.applyColorMap(overlay_resized, cv2.COLORMAP_JET)
+
     my_slice = np.uint8(255*((_slice-np.min(_slice))/np.max(_slice)))
     # my_slice = cv2.applyColorMap(my_slice, cv2.COLORMAP_BONE)
     my_slice = cv2.cvtColor(my_slice, cv2.COLOR_GRAY2RGB)
+    img_h, img_w = my_slice.shape[0], my_slice.shape[1]
+    overlay_resized = cv2.resize(overlay, (img_w, img_h))
+    overlay_resized = np.uint8(255 * (overlay_resized - np.min(overlay_resized)) / np.max(overlay_resized))
+    overlay_resized = cv2.applyColorMap(overlay_resized, cv2.COLORMAP_JET)
 
     # img = np.uint8(255*img)
     # img = cv2.applyColorMap(img, cv2.COLORMAP_BONE)
@@ -192,7 +253,11 @@ def grad_cam(image, _slice, mri_patch, model, _count, label):
     # print(overlay_resized.shape)
     # print(h_l, h_u, w_l, w_u)
     # print(my_slice.shape)
-    temp = 0.5*overlay_resized + 0.5*my_slice
+    temp = None
+    try:
+        temp = 0.5*overlay_resized + 0.5*my_slice
+    except ValueError:
+        print(f'my_slice: {my_slice.shape}, overlay: {overlay_resized.shape}')
     # temp = temp/np.max(temp)
     # temp = np.uint8(255*temp)
     # img[h_l:h_u + 1, w_l:w_u + 1] = temp
@@ -201,8 +266,8 @@ def grad_cam(image, _slice, mri_patch, model, _count, label):
     # print(f'overlay shape: {overlay_resized.shape}')
     combined = temp
     # combined[h_l:h_u + 1, w_l:w_u + 1] = temp
-    combined = cv2.rotate(combined, cv2.ROTATE_90_COUNTERCLOCKWISE)
-    my_slice_rot = cv2.rotate(my_slice, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    # combined = cv2.rotate(combined, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    # my_slice_rot = cv2.rotate(my_slice, cv2.ROTATE_90_COUNTERCLOCKWISE)
     # combined = 255*combined
     # combined = combined.astype(np.uint8)
     # combined = cv2.normalize(src=combined, dst=None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
@@ -220,11 +285,11 @@ def grad_cam(image, _slice, mri_patch, model, _count, label):
     # ax[1].set_xticks([])
     # ax[1].set_yticks([])
     # plt.tight_layout()
-    mri_path = f'gradcam_full_ds030/mri/gradcam-{_count}-{label}.png'
+    mri_path = f'gradcam_full_tcia/mri/gradcam-{_count}-{label}.png'
     # plt.savefig(fig_path)
     # print(label, fig_path)
-    cv2.imwrite(mri_path, my_slice_rot)
-    overlay_path = f'gradcam_full_ds030/overlay/gradcam-{_count}-{label}.png'
+    cv2.imwrite(mri_path, my_slice)
+    overlay_path = f'gradcam_full_tcia/overlay/gradcam-{_count}-{label}.png'
     cv2.imwrite(overlay_path, combined)
     return cam_raw
 
@@ -248,14 +313,17 @@ def main():
     for count in range(n_items):
         image, mri_patch, _slice, label = dataset.getitem(count)
         image = image.to(device, dtype=torch.float)
-        cam_raw = grad_cam(image, _slice, mri_patch, model, count, label)
+        try:
+            cam_raw = grad_cam(image, _slice, mri_patch, model, count, label)
+        except:
+            continue
 
         # print(f'label: {label}, max: {np.max(cam_raw)}, min:{np.min(cam_raw)}')
         # cam_val.append(cam_raw.tolist())
-        cam_val[count, :-1] = cam_raw
-        cam_val[count, -1] = label
-    cam_df = pd.DataFrame(cam_val)
-    cam_df.to_csv('sandbox/cam_df.csv')
+        # cam_val[count, :-1] = cam_raw
+        # cam_val[count, -1] = label
+    # cam_df = pd.DataFrame(cam_val)
+    # cam_df.to_csv('sandbox/cam_df.csv')
 
     # print('\n-------------------------------\n')
     # print(np.max(cam_val))

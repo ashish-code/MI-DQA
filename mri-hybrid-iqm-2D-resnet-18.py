@@ -46,8 +46,8 @@ patch_w = 56
 iqm_dim = 64
 
 checkpoint_dir = './checkpoints/'
-ckpt_path = checkpoint_dir+'mri-hybrid-iqm-dqa-2d-resnet-18.pth'
-perf_path = checkpoint_dir+'mri-hybrid-iqm-dqa-2d-resnet-18.perf'
+ckpt_path = checkpoint_dir+'mri-hybrid-resnet-18.pth'
+perf_path = checkpoint_dir+'mri-hybrid-resnet-18.perf'
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # >> Dataset class >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -78,7 +78,7 @@ class MRIData(Dataset):
         nii = nii.get_fdata()
         [img_h, img_w, img_d] = nii.shape
         # drop the bottom 25% and top 10% of the slices
-        nii = nii[:, :, int(img_d / 4):int(9 * img_d / 10)]
+        nii = nii[:, :, int(3* img_d / 10):int(7 * img_d / 10)]
         [img_h, img_w, img_d] = nii.shape
         _patch_h = patch_h
         _patch_w = patch_w
@@ -99,7 +99,10 @@ class MRIData(Dataset):
         nii = torch.tensor(nii)
         nii.unsqueeze_(0)
         nii = nii.repeat(3, 1, 1)
+        # normalize iqm vector
+        # _iqm = _iqm/np.linalg.norm(_iqm)
         _iqm = torch.tensor(_iqm)
+
         return nii, _iqm, _label
 
     def __len__(self):
@@ -111,6 +114,10 @@ class MRIData(Dataset):
 #
 # for ibatch, (nii, iqm, label) in enumerate(dataloader):
 #     print(ibatch, nii.shape, iqm.shape, label.shape)
+
+def normalize(x):
+    x_normed = x / x.max(0, keepdim=True)[0]
+    return x_normed
 
 
 def train_model(model, criterion, optimizer, scheduler, epoch, perf, num_epochs=n_epoch):
@@ -140,6 +147,7 @@ def train_model(model, criterion, optimizer, scheduler, epoch, perf, num_epochs=
             # Iterate over data.
             for ibatch, (images, iqms, labels) in enumerate(dataloader):
                 images = images.to(device, dtype=torch.float)
+                iqms = normalize(iqms)
                 iqms = iqms.to(device, dtype=torch.float)
                 labels = labels.to(device, dtype=torch.long)
 
@@ -198,6 +206,7 @@ def train_model(model, criterion, optimizer, scheduler, epoch, perf, num_epochs=
     model.load_state_dict(best_model_wts)
     return model
 
+flag = False
 
 # hybrid network model class
 class HybridNet(nn.Module):
@@ -211,6 +220,12 @@ class HybridNet(nn.Module):
     def forward(self, image, iqm):
         x1 = self.cnn(image)
         x2 = iqm
+        global flag
+        if not flag:
+            print(x1[0])
+            print(x2[0])
+            flag = True
+        # x2 = torch.batch_norm(x2)
         x = torch.cat((x1, x2), dim=1)
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
@@ -263,7 +278,7 @@ def main():
     model_ft = train_model(model_ft, criterion, optimizer_ft, exp_lr_scheduler, epoch, perf, num_epochs=n_epoch)
 
 
-if __name__=='__main__':
+if __name__ == '__main__':
     main()
 
 
